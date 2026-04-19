@@ -1,4 +1,6 @@
+import json
 import os
+import gc
 import multiprocessing as mp
 from collections import Counter, defaultdict
 import regex as re
@@ -228,6 +230,12 @@ class BPE_Trainer:
 
         wordid_encoding = {word_to_ids[word]: encoding for word, encoding in word_encoding.items()}
 
+        del word_counts
+        del word_to_ids
+        del ids_to_words
+        # 视情况也可以把其他不需要的中间变量 del 掉
+        gc.collect() # 强制回收内存
+
         vocab, merges = c_bpe.train_bpe_cpp(
             wordids_counts,
             wordid_encoding,
@@ -267,3 +275,36 @@ class BPE_Trainer:
         #         print(f"Currently at vocab size: {size} / {vocab_size}")
 
         return vocabulary, fin_merges
+    
+
+class Tokenizer:
+    def __init__(self, vocab, merges, special_tokens = None):
+        self.vocab = vocab
+        self.merges = set(merges)
+        self.special_tokens = special_tokens if special_tokens else []
+        self.special_tokens_bytes = [
+            token.encode('utf-8') for token in self.special_tokens
+        ]
+        self.vocab_to_ids = {v: k for k, v in vocab.items()}
+
+        for token_bytes in self.special_tokens_bytes:
+            if token_bytes not in self.vocab_to_ids:
+                new_id = len(self.vocab)
+                self.vocab[new_id] = token_bytes
+                self.vocab_to_ids[token_bytes] = new_id
+
+    @classmethod
+    def from_files(cls, vocab_path, merges_path, special_tokens=None):
+        with open(vocab_path, 'r', encoding='utf-8') as vf:
+            vocab = json.load(vf)
+            vocab = {int(k): bytes(v, 'latin-1') if isinstance(v, str) else bytes(v)
+                    for k, v in vocab.items()}
+        
+        with open(vocab_path, 'r', encoding='utf-8') as mf:
+            lines = mf.readlines()
+            merges_pairs = [tuple(line.strip().split()) for line in lines if not line.startswith('#') and line.strip()]
+            merges = [(a.encode('utf-8'), b.encode('utf-8')) for a, b in merges_pairs]
+
+        return cls(vocab=vocab, merges=merges, special_tokens=special_tokens)
+
+        
